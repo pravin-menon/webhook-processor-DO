@@ -2,6 +2,7 @@ package router
 
 import (
 	"os"
+	"strings"
 	"webhook-processor/api/handlers"
 	"webhook-processor/api/middleware"
 	"webhook-processor/config"
@@ -89,27 +90,12 @@ func Setup(logger *logger.Logger, publisher queue.Publisher, cfg *config.Config)
 			zap.String("content_type", contentType),
 			zap.String("method", c.Request.Method))
 
-		// MailerCloud validation scenarios:
+		// MailerCloud validation scenarios (do NOT read/consume body here):
 		// 1. Webhook-Id header with "WebhookID" value (classic validation)
-		// 2. User-Agent contains "MailerCloud" (test requests)
-		// 3. Empty payload with specific headers (URL validation)
-		isMailerCloudValidation := false
-
-		if webhookId == "WebhookID" || userAgent == "MailerCloud" {
-			isMailerCloudValidation = true
-		}
-
-		// Also check for empty or minimal payload which indicates validation
-		var requestBody map[string]interface{}
-		if err := c.ShouldBindJSON(&requestBody); err == nil {
-			// If payload is empty or minimal, it's likely a validation request
-			if len(requestBody) == 0 || (len(requestBody) == 1 && requestBody["test"] != nil) {
-				isMailerCloudValidation = true
-			}
-		}
-
-		// Reset the request body for further processing
-		c.Request.Body = c.Request.Body
+		// 2. User-Agent equals/contains "MailerCloud" (test requests)
+		isMailerCloudValidation := webhookId == "WebhookID" || userAgent == "MailerCloud" ||
+			// Some clients send UA variations like "MailerCloud/<version>"
+			(strings.Contains(userAgent, "MailerCloud"))
 
 		if isMailerCloudValidation {
 			// This is MailerCloud validation - return success
