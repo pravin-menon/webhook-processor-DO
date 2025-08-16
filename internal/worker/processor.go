@@ -34,6 +34,9 @@ func NewWorker(channel *amqp.Channel, db *storage.MongoDB, logger *zap.Logger) *
 }
 
 func (w *Worker) Start(ctx context.Context, queueName string) error {
+	// Log that the worker is starting consumption
+	w.logger.Info("Worker started consuming messages", zap.String("queue", queueName))
+
 	msgs, err := w.channel.Consume(
 		queueName,
 		"",    // consumer
@@ -104,6 +107,15 @@ func (w *Worker) Start(ctx context.Context, queueName string) error {
 			// Record metrics
 			metrics.WebhookProcessed.WithLabelValues(event.ClientID, event.Event, "success").Inc()
 			metrics.WebhookProcessingTime.WithLabelValues(event.ClientID, event.Event).Observe(time.Since(start).Seconds())
+
+			// Success log for visibility
+			w.logger.Info("Event processed and stored",
+				zap.String("client_id", event.ClientID),
+				zap.String("event", event.Event),
+				zap.String("email", event.Email),
+				zap.String("campaign_id", event.CampaignID),
+				zap.String("webhook_id", event.WebhookID),
+			)
 
 			msg.Ack(false)
 		}

@@ -143,6 +143,16 @@ func (r *RabbitMQ) Publish(event models.WebhookEvent) error {
 		return fmt.Errorf("failed to publish message: %v", err)
 	}
 
+	// Log publish success for tracing
+	if r.logger != nil {
+		r.logger.Info("Published message",
+			zap.String("client_id", event.ClientID),
+			zap.String("event", event.Event),
+			zap.String("webhook_id", event.WebhookID),
+			zap.String("exchange", r.exchangeName),
+		)
+	}
+
 	return nil
 }
 

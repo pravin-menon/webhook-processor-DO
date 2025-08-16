@@ -1,6 +1,6 @@
 services:
   webhook-processor:
-    image: vinum5/webhook-processor-prod:v1.0.15
+    image: vinum5/webhook-processor-prod:v1.0.16
     restart: unless-stopped
     environment:
       - APP_ENV=production
@@ -42,7 +42,7 @@ services:
       retries: 3
 
   webhook-worker:
-    image: vinum5/webhook-processor-prod-worker:v1.0.4
+    image: vinum5/webhook-processor-prod-worker:v1.0.5
     restart: unless-stopped
     environment:
       - APP_ENV=production
