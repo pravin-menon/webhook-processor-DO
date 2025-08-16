@@ -1,9 +1,6 @@
 services:
   webhook-processor:
-    build: 
-      context: .
-      dockerfile: Dockerfile
-    image: ${DOCKER_REGISTRY:-webhook-processor}:${TAG:-latest}
+    image: vinum5/webhook-processor-prod:v1.0.14
     restart: unless-stopped
     environment:
       - APP_ENV=production
@@ -45,10 +42,7 @@ services:
       retries: 3
 
   webhook-worker:
-    build: 
-      context: .
-      dockerfile: Dockerfile.worker
-    image: ${DOCKER_REGISTRY:-webhook-processor}-worker:${TAG:-latest}
+    image: vinum5/webhook-processor-prod-worker:v1.0.3
     restart: unless-stopped
     environment:
       - APP_ENV=production
@@ -65,6 +59,7 @@ services:
 
   nginx-proxy:
     image: nginxproxy/nginx-proxy:latest
+    container_name: nginx-proxy
     labels:
       - "com.github.nginx-proxy.docker-gen=true"
     ports:
@@ -87,22 +82,23 @@ services:
       - proxy-network
     restart: unless-stopped
 
-  letsencrypt:
-    image: nginxproxy/acme-companion:latest
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-      - certs:/etc/nginx/certs
-      - vhost:/etc/nginx/vhost.d
-      - html:/usr/share/nginx/html
-      - acme:/etc/acme.sh
-    environment:
-      - DEFAULT_EMAIL=${LETSENCRYPT_EMAIL}
-      - NGINX_PROXY_CONTAINER=nginx-proxy
-    depends_on:
-      - nginx-proxy
-    networks:
-      - proxy-network
-    restart: unless-stopped
+  # letsencrypt:
+  #   image: nginxproxy/acme-companion:latest
+  #   container_name: letsencrypt
+  #   volumes:
+  #     - /var/run/docker.sock:/var/run/docker.sock:ro
+  #     - certs:/etc/nginx/certs
+  #     - vhost:/etc/nginx/vhost.d
+  #     - html:/usr/share/nginx/html
+  #     - acme:/etc/acme.sh
+  #   environment:
+  #     - DEFAULT_EMAIL=${LETSENCRYPT_EMAIL}
+  #     - NGINX_PROXY_CONTAINER=nginx-proxy
+  #   depends_on:
+  #     - nginx-proxy
+  #   networks:
+  #     - proxy-network
+  #   restart: unless-stopped
 
   # Production monitoring (optional)
   prometheus:
@@ -120,8 +116,17 @@ services:
       - '--web.console.templates=/etc/prometheus/consoles'
       - '--storage.tsdb.retention.time=200h'
       - '--web.enable-lifecycle'
+      - '--web.external-url=https://${DOMAIN}/prometheus/'
+      - '--web.route-prefix=/'
+    environment:
+      # Nginx proxy configuration  
+      - VIRTUAL_HOST=${DOMAIN}
+      - VIRTUAL_PORT=9090
+      - VIRTUAL_PATH=/prometheus
+      - LETSENCRYPT_HOST=${DOMAIN}
     networks:
       - internal
+      - proxy-network
     restart: unless-stopped
     profiles:
       - monitoring
@@ -135,6 +140,12 @@ services:
       - GF_USERS_ALLOW_SIGN_UP=false
       - GF_SERVER_DOMAIN=${DOMAIN}
       - GF_SERVER_ROOT_URL=https://${DOMAIN}/grafana/
+      - GF_SERVER_SERVE_FROM_SUB_PATH=true
+      # Nginx proxy configuration
+      - VIRTUAL_HOST=${DOMAIN}
+      - VIRTUAL_PORT=3000
+      - VIRTUAL_PATH=/grafana
+      - LETSENCRYPT_HOST=${DOMAIN}
     volumes:
       - grafana_data:/var/lib/grafana
       - ./monitoring/grafana/provisioning:/etc/grafana/provisioning
@@ -142,6 +153,7 @@ services:
       - prometheus
     networks:
       - internal
+      - proxy-network
     restart: unless-stopped
     profiles:
       - monitoring
