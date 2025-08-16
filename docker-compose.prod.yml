@@ -54,8 +54,8 @@ services:
       - CLOUDAMQP_URL=${CLOUDAMQP_URL}
       - RABBITMQ_EXCHANGE=${RABBITMQ_EXCHANGE:-webhook_events}
       - RABBITMQ_QUEUE=${RABBITMQ_QUEUE:-webhook_queue}
-  # MailerCloud mapping for worker (if needed for enrichment)
-  - MAILERCLOUD_API_KEYS=${MAILERCLOUD_API_KEYS}
+      # MailerCloud mapping for worker (if needed for enrichment)
+      - MAILERCLOUD_API_KEYS=${MAILERCLOUD_API_KEYS}
     networks:
       - internal
 
