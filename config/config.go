@@ -4,6 +4,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/spf13/viper"
 )
@@ -11,10 +12,18 @@ import (
 type Config struct {
 	Server     ServerConfig
 	LogLevel   string           `mapstructure:"log_level"`
+	Webhook    WebhookConfig    `mapstructure:"webhook"`
 	RabbitMQ   RabbitMQConfig   `mapstructure:"rabbitmq"`
 	MongoDB    MongoDBConfig    `mapstructure:"mongodb"`
 	Monitoring MonitoringConfig `mapstructure:"monitoring"`
 	Security   SecurityConfig   `mapstructure:"security"`
+	Worker     WorkerConfig     `mapstructure:"worker"`
+}
+
+type WebhookConfig struct {
+	IngressRetryCount       int           `mapstructure:"ingressRetryCount"`
+	IngressRetryDelay       time.Duration `mapstructure:"ingressRetryDelay"`
+	MaxConsecutiveFailures  int           `mapstructure:"maxConsecutiveFailures"`
 }
 
 type SecurityConfig struct {
@@ -37,11 +46,19 @@ type RabbitMQConfig struct {
 	URL       string `mapstructure:"url"`
 	Exchange  string `mapstructure:"exchange"`
 	QueueName string `mapstructure:"queueName"`
+	DLXName   string `mapstructure:"deadLetterExchange"`
+	DLXQueue  string `mapstructure:"deadLetterQueue"`
+	DLXRoutingKey string `mapstructure:"deadLetterRoutingKey"`
+	MessageTTL int    `mapstructure:"messageTTL"`
 }
 
 type ServerConfig struct {
 	Port int
 	Host string
+}
+
+type WorkerConfig struct {
+	Concurrency int `mapstructure:"concurrency"`
 }
 
 func Load() (*Config, error) {
@@ -56,6 +73,10 @@ func Load() (*Config, error) {
 	viper.SetDefault("log_level", "info")
 	viper.SetDefault("monitoring.prometheusPort", 9090)
 	viper.SetDefault("monitoring.metricsPath", "/metrics")
+	viper.SetDefault("webhook.ingressRetryCount", 3)
+	viper.SetDefault("webhook.ingressRetryDelay", "10s")
+	viper.SetDefault("webhook.maxConsecutiveFailures", 20)
+	viper.SetDefault("worker.concurrency", 4)
 
 	if err := viper.ReadInConfig(); err != nil {
 		return nil, err
@@ -105,6 +126,43 @@ func Load() (*Config, error) {
 
 	if level := os.Getenv("LOG_LEVEL"); level != "" {
 		cfg.LogLevel = level
+	}
+
+	if retryCount := os.Getenv("WEBHOOK_RETRY_COUNT"); retryCount != "" {
+		if v, err := strconv.Atoi(retryCount); err == nil {
+			cfg.Webhook.IngressRetryCount = v
+		}
+	}
+	if retryDelay := os.Getenv("WEBHOOK_RETRY_DELAY_SECONDS"); retryDelay != "" {
+		if v, err := strconv.Atoi(retryDelay); err == nil {
+			cfg.Webhook.IngressRetryDelay = time.Duration(v) * time.Second
+		}
+	}
+	if maxFailures := os.Getenv("WEBHOOK_MAX_FAILURES"); maxFailures != "" {
+		if v, err := strconv.Atoi(maxFailures); err == nil {
+			cfg.Webhook.MaxConsecutiveFailures = v
+		}
+	}
+
+	if concurrency := os.Getenv("WORKER_CONCURRENCY"); concurrency != "" {
+		if v, err := strconv.Atoi(concurrency); err == nil {
+			cfg.Worker.Concurrency = v
+		}
+	}
+
+	if dlx := os.Getenv("RABBITMQ_DLX"); dlx != "" {
+		cfg.RabbitMQ.DLXName = dlx
+	}
+	if dlq := os.Getenv("RABBITMQ_DLQ"); dlq != "" {
+		cfg.RabbitMQ.DLXQueue = dlq
+	}
+	if dlxRouting := os.Getenv("RABBITMQ_DLX_ROUTING_KEY"); dlxRouting != "" {
+		cfg.RabbitMQ.DLXRoutingKey = dlxRouting
+	}
+	if ttl := os.Getenv("RABBITMQ_MESSAGE_TTL_MS"); ttl != "" {
+		if v, err := strconv.Atoi(ttl); err == nil {
+			cfg.RabbitMQ.MessageTTL = v
+		}
 	}
 
 	if header := os.Getenv("API_KEY_HEADER"); header != "" {

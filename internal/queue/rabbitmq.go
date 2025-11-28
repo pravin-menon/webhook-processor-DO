@@ -3,9 +3,11 @@ package queue
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
+	"webhook-processor/config"
 	"webhook-processor/internal/models"
 	"webhook-processor/pkg/metrics"
 
@@ -15,6 +17,7 @@ import (
 
 type Publisher interface {
 	Publish(event models.WebhookEvent) error
+	HealthCheck(ctx context.Context) error
 	Close() error
 }
 
@@ -24,6 +27,7 @@ type RabbitMQ struct {
 	exchangeName string
 	logger       *zap.Logger
 	queueName    string
+	config       config.RabbitMQConfig
 }
 
 // StartMetricsUpdater starts a goroutine to periodically update queue metrics
@@ -45,8 +49,8 @@ func (r *RabbitMQ) StartMetricsUpdater(ctx context.Context) {
 	}()
 }
 
-func NewRabbitMQ(url, exchangeName, queueName string, logger *zap.Logger) (*RabbitMQ, error) {
-	conn, err := amqp.Dial(url)
+func NewRabbitMQ(rabbitCfg config.RabbitMQConfig, logger *zap.Logger) (*RabbitMQ, error) {
+	conn, err := amqp.Dial(rabbitCfg.URL)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to RabbitMQ: %v", err)
 	}
@@ -57,57 +61,20 @@ func NewRabbitMQ(url, exchangeName, queueName string, logger *zap.Logger) (*Rabb
 		return nil, fmt.Errorf("failed to open channel: %v", err)
 	}
 
-	// Declare exchange
-	err = ch.ExchangeDeclare(
-		exchangeName,
-		"direct",
-		true,  // durable
-		false, // auto-deleted
-		false, // internal
-		false, // no-wait
-		nil,   // arguments
-	)
+	q, err := DeclareTopology(ch, rabbitCfg, logger)
 	if err != nil {
 		ch.Close()
 		conn.Close()
-		return nil, fmt.Errorf("failed to declare exchange: %v", err)
-	}
-
-	// Declare queue
-	q, err := ch.QueueDeclare(
-		queueName, // name
-		true,      // durable
-		false,     // delete when unused
-		false,     // exclusive
-		false,     // no-wait
-		nil,       // arguments
-	)
-	if err != nil {
-		ch.Close()
-		conn.Close()
-		return nil, fmt.Errorf("failed to declare queue: %v", err)
-	}
-
-	// Bind queue to exchange
-	err = ch.QueueBind(
-		q.Name,       // queue name
-		"",           // routing key
-		exchangeName, // exchange
-		false,
-		nil,
-	)
-	if err != nil {
-		ch.Close()
-		conn.Close()
-		return nil, fmt.Errorf("failed to bind queue: %v", err)
+		return nil, err
 	}
 
 	return &RabbitMQ{
 		conn:         conn,
 		ch:           ch,
-		exchangeName: exchangeName,
+		exchangeName: rabbitCfg.Exchange,
 		logger:       logger,
-		queueName:    queueName,
+		queueName:    q.Name,
+		config:       rabbitCfg,
 	}, nil
 }
 
@@ -156,6 +123,21 @@ func (r *RabbitMQ) Publish(event models.WebhookEvent) error {
 	return nil
 }
 
+func (r *RabbitMQ) HealthCheck(ctx context.Context) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+	if r.conn == nil || r.conn.IsClosed() {
+		return errors.New("rabbitmq connection closed")
+	}
+	if r.ch == nil || r.ch.IsClosed() {
+		return errors.New("rabbitmq channel closed")
+	}
+	return nil
+}
+
 func (r *RabbitMQ) Close() error {
 	if err := r.ch.Close(); err != nil {
 		r.logger.Error("Failed to close channel", zap.Error(err))
@@ -193,4 +175,89 @@ func (r *RabbitMQ) DeclareClientQueue(clientID string) error {
 	}
 
 	return nil
+}
+
+// DeclareTopology ensures the core exchange, queue, and optional DLQ exist with the right bindings.
+func DeclareTopology(ch *amqp.Channel, rabbitCfg config.RabbitMQConfig, logger *zap.Logger) (amqp.Queue, error) {
+	// Declare primary exchange
+	if err := ch.ExchangeDeclare(
+		rabbitCfg.Exchange,
+		"direct",
+		true,
+		false,
+		false,
+		false,
+		nil,
+	); err != nil {
+		return amqp.Queue{}, fmt.Errorf("failed to declare exchange: %w", err)
+	}
+
+	queueArgs := amqp.Table{}
+	if rabbitCfg.DLXName != "" {
+		queueArgs["x-dead-letter-exchange"] = rabbitCfg.DLXName
+		if rabbitCfg.DLXRoutingKey != "" {
+			queueArgs["x-dead-letter-routing-key"] = rabbitCfg.DLXRoutingKey
+		}
+	}
+	if rabbitCfg.MessageTTL > 0 {
+		queueArgs["x-message-ttl"] = int32(rabbitCfg.MessageTTL)
+	}
+
+	q, err := ch.QueueDeclare(
+		rabbitCfg.QueueName,
+		true,
+		false,
+		false,
+		false,
+		queueArgs,
+	)
+	if err != nil {
+		return amqp.Queue{}, fmt.Errorf("failed to declare queue: %w", err)
+	}
+
+	if err := ch.QueueBind(q.Name, "", rabbitCfg.Exchange, false, nil); err != nil {
+		return amqp.Queue{}, fmt.Errorf("failed to bind queue: %w", err)
+	}
+
+	if rabbitCfg.DLXName != "" && rabbitCfg.DLXQueue != "" {
+		if err := ch.ExchangeDeclare(
+			rabbitCfg.DLXName,
+			"fanout",
+			true,
+			false,
+			false,
+			false,
+			nil,
+		); err != nil {
+			return amqp.Queue{}, fmt.Errorf("failed to declare DLX: %w", err)
+		}
+
+		dlq, err := ch.QueueDeclare(
+			rabbitCfg.DLXQueue,
+			true,
+			false,
+			false,
+			false,
+			nil,
+		)
+		if err != nil {
+			return amqp.Queue{}, fmt.Errorf("failed to declare DLQ: %w", err)
+		}
+
+		bindingKey := rabbitCfg.DLXRoutingKey
+		if bindingKey == "" {
+			bindingKey = "dlq"
+		}
+		if err := ch.QueueBind(dlq.Name, bindingKey, rabbitCfg.DLXName, false, nil); err != nil {
+			return amqp.Queue{}, fmt.Errorf("failed to bind DLQ: %w", err)
+		}
+		if logger != nil {
+			logger.Info("DLQ configured",
+				zap.String("exchange", rabbitCfg.DLXName),
+				zap.String("queue", rabbitCfg.DLXQueue),
+			)
+		}
+	}
+
+	return q, nil
 }

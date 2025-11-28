@@ -62,7 +62,7 @@ func Setup(logger *logger.Logger, publisher queue.Publisher, cfg *config.Config)
 		webhookHandler = handlers.NewDebugMailerCloudWebhookHandler(logger.Desugar(), publisher, webhookMapper)
 	} else {
 		logger.Desugar().Info("Initializing PRODUCTION webhook handler")
-		webhookHandler = handlers.NewMailerCloudWebhookHandler(logger.Desugar(), publisher, webhookMapper)
+		webhookHandler = handlers.NewMailerCloudWebhookHandler(logger.Desugar(), publisher, webhookMapper, cfg.Webhook)
 	}
 
 	// Public webhook validation endpoint for MailerCloud (no authentication required)

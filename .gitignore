@@ -29,7 +29,6 @@ temp/
 .env
 .env.*
 !.env.example
-!.env.production.example
 *.env
 *env*
 
@@ -128,6 +127,4 @@ webhook_debug.log
 raw_webhook_data.json
 
 # Miscellaneous
-GRAFANA_PROVISIONING_FIX.md
-WEBHOOK_VALIDATION_FIX.md
-DNS_CONFIGURATION_GUIDE.md
+docs/

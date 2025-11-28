@@ -1,10 +1,12 @@
 package handlers
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"time"
 
+	"webhook-processor/config"
 	"webhook-processor/internal/mapping"
 	"webhook-processor/internal/models"
 	"webhook-processor/internal/queue"
@@ -19,14 +21,27 @@ type MailerCloudWebhookHandler struct {
 	publisher     queue.Publisher
 	rateLimiter   *RateLimiter
 	webhookMapper *mapping.WebhookMappingService
+	webhookCfg    config.WebhookConfig
+	failureTracker *FailureTracker
 }
 
-func NewMailerCloudWebhookHandler(logger *zap.Logger, publisher queue.Publisher, webhookMapper *mapping.WebhookMappingService) *MailerCloudWebhookHandler {
+func NewMailerCloudWebhookHandler(logger *zap.Logger, publisher queue.Publisher, webhookMapper *mapping.WebhookMappingService, webhookCfg config.WebhookConfig) *MailerCloudWebhookHandler {
+	if webhookCfg.IngressRetryCount <= 0 {
+		webhookCfg.IngressRetryCount = 1
+	}
+	if webhookCfg.IngressRetryDelay <= 0 {
+		webhookCfg.IngressRetryDelay = 5 * time.Second
+	}
+	if webhookCfg.MaxConsecutiveFailures <= 0 {
+		webhookCfg.MaxConsecutiveFailures = 20
+	}
 	return &MailerCloudWebhookHandler{
 		logger:        logger,
 		publisher:     publisher,
 		rateLimiter:   NewRateLimiter(),
 		webhookMapper: webhookMapper,
+		webhookCfg:    webhookCfg,
+		failureTracker: NewFailureTracker(),
 	}
 }
 
@@ -59,8 +74,8 @@ func (h *MailerCloudWebhookHandler) HandleWebhook(c *gin.Context) {
 		return
 	}
 
-	// Log request details for debugging
-	h.logger.Info("Received webhook request",
+	// Log request details at debug level to avoid flooding production logs
+	h.logger.Debug("Received webhook request",
 		zap.String("method", c.Request.Method),
 		zap.String("content-type", c.GetHeader("Content-Type")),
 		zap.String("user-agent", c.GetHeader("User-Agent")),
@@ -204,9 +219,24 @@ func (h *MailerCloudWebhookHandler) HandleWebhook(c *gin.Context) {
 	// Record the received event metric
 	metrics.WebhookReceived.WithLabelValues(event.ClientID, event.Event).Inc()
 
-	// Send the event to the message queue
-	if err := h.publisher.Publish(event); err != nil {
+	// Send the event to the message queue with ingress-level retries
+	if err := h.publishWithRetry(c.Request.Context(), event); err != nil {
 		metrics.WebhookProcessed.WithLabelValues(event.ClientID, event.Event, "failed").Inc()
+		failureCount := h.failureTracker.RecordFailure(h.failureKey(event))
+		metrics.WebhookIngressConsecutiveFailures.WithLabelValues(event.ClientID, event.WebhookID).Set(float64(failureCount))
+		if failureCount >= h.webhookCfg.MaxConsecutiveFailures {
+			h.logger.Error("Ingress consecutive failure limit reached",
+				zap.Int("failures", failureCount),
+				zap.Int("limit", h.webhookCfg.MaxConsecutiveFailures),
+				zap.String("webhook_id", event.WebhookID),
+				zap.String("client_id", event.ClientID))
+		} else if failureCount >= h.webhookCfg.MaxConsecutiveFailures/2 {
+			h.logger.Warn("Ingress consecutive failures approaching limit",
+				zap.Int("failures", failureCount),
+				zap.Int("limit", h.webhookCfg.MaxConsecutiveFailures),
+				zap.String("webhook_id", event.WebhookID),
+				zap.String("client_id", event.ClientID))
+		}
 
 		// Record processing time metric for failed requests too
 		if event.ClientID != "" && event.Event != "" {
@@ -222,6 +252,8 @@ func (h *MailerCloudWebhookHandler) HandleWebhook(c *gin.Context) {
 	}
 
 	metrics.WebhookProcessed.WithLabelValues(event.ClientID, event.Event, "success").Inc()
+	h.failureTracker.RecordSuccess(h.failureKey(event))
+	metrics.WebhookIngressConsecutiveFailures.WithLabelValues(event.ClientID, event.WebhookID).Set(0)
 
 	// Record processing time metric
 	if event.ClientID != "" && event.Event != "" {
@@ -238,6 +270,55 @@ func (h *MailerCloudWebhookHandler) HandleWebhook(c *gin.Context) {
 		"webhook_id": event.WebhookID,
 		"client_id":  event.ClientID,
 	})
+}
+
+func (h *MailerCloudWebhookHandler) publishWithRetry(ctx context.Context, event models.WebhookEvent) error {
+	attempts := h.webhookCfg.IngressRetryCount
+	if attempts < 1 {
+		attempts = 1
+	}
+	delay := h.webhookCfg.IngressRetryDelay
+	if delay <= 0 {
+		delay = 5 * time.Second
+	}
+
+	var lastErr error
+	for attempt := 1; attempt <= attempts; attempt++ {
+		if err := h.publisher.Publish(event); err == nil {
+			if attempt > 1 {
+				h.logger.Info("Publish succeeded after retry",
+					zap.Int("attempt", attempt),
+					zap.String("webhook_id", event.WebhookID),
+					zap.String("client_id", event.ClientID))
+			}
+			return nil
+		} else {
+			lastErr = err
+			h.logger.Warn("Failed to publish event",
+				zap.Error(err),
+				zap.Int("attempt", attempt),
+				zap.String("webhook_id", event.WebhookID),
+				zap.String("client_id", event.ClientID))
+
+			if attempt < attempts {
+				metrics.WebhookIngressRetryCount.WithLabelValues(event.ClientID, event.WebhookID).Inc()
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				case <-time.After(delay):
+				}
+			}
+		}
+	}
+
+	if lastErr == nil {
+		lastErr = fmt.Errorf("failed to publish event after %d attempts", h.webhookCfg.IngressRetryCount)
+	}
+	return lastErr
+}
+
+func (h *MailerCloudWebhookHandler) failureKey(event models.WebhookEvent) string {
+	return fmt.Sprintf("%s:%s", event.ClientID, event.WebhookID)
 }
 
 // extractClientID identifies the client using webhook ID mapping

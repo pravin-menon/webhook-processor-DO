@@ -38,43 +38,9 @@ func main() {
 	}
 	defer ch.Close()
 
-	// Declare exchange
-	err = ch.ExchangeDeclare(
-		cfg.RabbitMQ.Exchange, // name
-		"direct",              // type
-		true,                  // durable
-		false,                 // auto-deleted
-		false,                 // internal
-		false,                 // no-wait
-		nil,                   // arguments
-	)
+	q, err := queue.DeclareTopology(ch, cfg.RabbitMQ, logger.Desugar())
 	if err != nil {
-		logger.Fatalf("Failed to declare exchange: %v", err)
-	}
-
-	// Declare queue
-	q, err := ch.QueueDeclare(
-		cfg.RabbitMQ.QueueName, // name
-		true,                   // durable
-		false,                  // delete when unused
-		false,                  // exclusive
-		false,                  // no-wait
-		nil,                    // arguments
-	)
-	if err != nil {
-		logger.Fatalf("Failed to declare queue: %v", err)
-	}
-
-	// Bind queue to exchange
-	err = ch.QueueBind(
-		q.Name,                // queue name
-		"",                    // routing key
-		cfg.RabbitMQ.Exchange, // exchange
-		false,
-		nil,
-	)
-	if err != nil {
-		logger.Fatalf("Failed to bind queue: %v", err)
+		logger.Fatalf("Failed to declare topology: %v", err)
 	}
 
 	// Initialize MongoDB connection
@@ -83,11 +49,14 @@ func main() {
 		logger.Fatalf("Failed to connect to MongoDB: %v", err)
 	}
 
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	// Initialize worker
-	w := worker.NewWorker(ch, db, logger.Desugar())
+	w := worker.NewWorker(ch, db, logger.Desugar(), cfg.Worker.Concurrency)
 
 	// Start consuming messages
-	if err := w.Start(context.Background(), q.Name); err != nil {
+	if err := w.Start(ctx, q.Name); err != nil {
 		logger.Fatalf("Failed to start worker: %v", err)
 	}
 
@@ -99,4 +68,6 @@ func main() {
 	<-quit
 
 	logger.Info("Worker shutting down")
+	cancel()
+	w.Wait()
 }

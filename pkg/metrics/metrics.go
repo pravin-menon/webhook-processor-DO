@@ -32,6 +32,16 @@ var (
 		Help: "The total number of webhook event retries",
 	}, []string{"client_id", "event_type"})
 
+	WebhookIngressRetryCount = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "webhook_ingress_retry_count",
+		Help: "Number of ingress retry attempts before responding to MailerCloud",
+	}, []string{"client_id", "webhook_id"})
+
+	WebhookIngressConsecutiveFailures = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "webhook_ingress_consecutive_failures",
+		Help: "Tracks consecutive ingress failures per webhook",
+	}, []string{"client_id", "webhook_id"})
+
 	RateLimitExceeded = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "webhook_rate_limit_exceeded_total",
 		Help: "The total number of times rate limits were exceeded",

@@ -9,9 +9,15 @@ rabbitmq:
   url: ""
   exchange: "webhook_events"
   queueName: "webhook_queue"
-  retryCount: 3
-  retryDelay: "10s"
-  maxRetryDelay: "300s"
+  deadLetterExchange: "webhook_events_dlq"
+  deadLetterQueue: "webhook_events_dlq"
+  deadLetterRoutingKey: ""
+  messageTTL: 0
+
+webhook:
+  ingressRetryCount: 3
+  ingressRetryDelay: "10s"
+  maxConsecutiveFailures: 20
 
 # MongoDB Configuration - MongoDB Atlas only
 mongodb:
@@ -30,3 +36,6 @@ security:
 logging:
   level: "info"
   format: "json"
+
+worker:
+  concurrency: 4

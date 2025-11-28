@@ -23,7 +23,7 @@ type Server struct {
 }
 
 func NewServer(cfg *config.Config, logger *logger.Logger) *Server {
-	publisher, err := queue.NewRabbitMQ(cfg.RabbitMQ.URL, cfg.RabbitMQ.Exchange, cfg.RabbitMQ.QueueName, logger.Desugar())
+	publisher, err := queue.NewRabbitMQ(cfg.RabbitMQ, logger.Desugar())
 	if err != nil {
 		logger.Fatalf("failed to create rabbitmq publisher: %v", err)
 	}
