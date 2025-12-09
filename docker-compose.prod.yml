@@ -1,6 +1,8 @@
 services:
   webhook-processor:
-    image: vinum5/webhook-processor-prod:v1.0.19
+    build:
+      context: .
+      dockerfile: Dockerfile
     restart: unless-stopped
     environment:
       - APP_ENV=production
@@ -15,14 +17,14 @@ services:
       - CLOUDAMQP_URL=${CLOUDAMQP_URL}
       - RABBITMQ_EXCHANGE=${RABBITMQ_EXCHANGE:-webhook_events}
       - RABBITMQ_QUEUE=${RABBITMQ_QUEUE:-webhook_queue}
-        - RABBITMQ_DLX=${RABBITMQ_DLX:-webhook_events_dlq}
-        - RABBITMQ_DLQ=${RABBITMQ_DLQ:-webhook_events_dlq}
-        - RABBITMQ_DLX_ROUTING_KEY=${RABBITMQ_DLX_ROUTING_KEY:-dlq}
-        - RABBITMQ_MESSAGE_TTL_MS=${RABBITMQ_MESSAGE_TTL_MS:-0}
-        - WEBHOOK_RETRY_COUNT=${WEBHOOK_RETRY_COUNT:-3}
-        - WEBHOOK_RETRY_DELAY_SECONDS=${WEBHOOK_RETRY_DELAY_SECONDS:-10}
-        - WEBHOOK_MAX_FAILURES=${WEBHOOK_MAX_FAILURES:-20}
-        - WORKER_CONCURRENCY=${WORKER_CONCURRENCY:-8}
+      - RABBITMQ_DLX=${RABBITMQ_DLX:-webhook_events_dlq}
+      - RABBITMQ_DLQ=${RABBITMQ_DLQ:-webhook_events_dlq}
+      - RABBITMQ_DLX_ROUTING_KEY=${RABBITMQ_DLX_ROUTING_KEY:-dlq}
+      - RABBITMQ_MESSAGE_TTL_MS=${RABBITMQ_MESSAGE_TTL_MS:-0}
+      - WEBHOOK_RETRY_COUNT=${WEBHOOK_RETRY_COUNT:-3}
+      - WEBHOOK_RETRY_DELAY_SECONDS=${WEBHOOK_RETRY_DELAY_SECONDS:-10}
+      - WEBHOOK_MAX_FAILURES=${WEBHOOK_MAX_FAILURES:-20}
+      - WORKER_CONCURRENCY=${WORKER_CONCURRENCY:-8}
       # Security
       - API_KEY_HEADER=${API_KEY_HEADER:-X-API-Key}
       - MAILERCLOUD_API_KEYS=${MAILERCLOUD_API_KEYS}
@@ -50,7 +52,9 @@ services:
       retries: 3
 
   webhook-worker:
-    image: vinum5/webhook-processor-prod-worker:v1.0.8
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
     restart: unless-stopped
     environment:
       - APP_ENV=production
@@ -62,11 +66,11 @@ services:
       - CLOUDAMQP_URL=${CLOUDAMQP_URL}
       - RABBITMQ_EXCHANGE=${RABBITMQ_EXCHANGE:-webhook_events}
       - RABBITMQ_QUEUE=${RABBITMQ_QUEUE:-webhook_queue}
-        - RABBITMQ_DLX=${RABBITMQ_DLX:-webhook_events_dlq}
-        - RABBITMQ_DLQ=${RABBITMQ_DLQ:-webhook_events_dlq}
-        - RABBITMQ_DLX_ROUTING_KEY=${RABBITMQ_DLX_ROUTING_KEY:-dlq}
-        - RABBITMQ_MESSAGE_TTL_MS=${RABBITMQ_MESSAGE_TTL_MS:-0}
-        - WORKER_CONCURRENCY=${WORKER_CONCURRENCY:-8}
+      - RABBITMQ_DLX=${RABBITMQ_DLX:-webhook_events_dlq}
+      - RABBITMQ_DLQ=${RABBITMQ_DLQ:-webhook_events_dlq}
+      - RABBITMQ_DLX_ROUTING_KEY=${RABBITMQ_DLX_ROUTING_KEY:-dlq}
+      - RABBITMQ_MESSAGE_TTL_MS=${RABBITMQ_MESSAGE_TTL_MS:-0}
+      - WORKER_CONCURRENCY=${WORKER_CONCURRENCY:-8}
       # MailerCloud mapping for worker (if needed for enrichment)
       - MAILERCLOUD_API_KEYS=${MAILERCLOUD_API_KEYS}
     networks:
@@ -97,23 +101,23 @@ services:
       - proxy-network
     restart: unless-stopped
 
-  # letsencrypt:
-  #   image: nginxproxy/acme-companion:latest
-  #   container_name: letsencrypt
-  #   volumes:
-  #     - /var/run/docker.sock:/var/run/docker.sock:ro
-  #     - certs:/etc/nginx/certs
-  #     - vhost:/etc/nginx/vhost.d
-  #     - html:/usr/share/nginx/html
-  #     - acme:/etc/acme.sh
-  #   environment:
-  #     - DEFAULT_EMAIL=${LETSENCRYPT_EMAIL}
-  #     - NGINX_PROXY_CONTAINER=nginx-proxy
-  #   depends_on:
-  #     - nginx-proxy
-  #   networks:
-  #     - proxy-network
-  #   restart: unless-stopped
+  letsencrypt:
+    image: nginxproxy/acme-companion:latest
+    container_name: letsencrypt
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - certs:/etc/nginx/certs
+      - vhost:/etc/nginx/vhost.d
+      - html:/usr/share/nginx/html
+      - acme:/etc/acme.sh
+    environment:
+      - DEFAULT_EMAIL=${LETSENCRYPT_EMAIL}
+      - NGINX_PROXY_CONTAINER=nginx-proxy
+    depends_on:
+      - nginx-proxy
+    networks:
+      - proxy-network
+    restart: unless-stopped
 
   # Production monitoring (optional)
   prometheus:
