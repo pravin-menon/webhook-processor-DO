@@ -2,6 +2,17 @@ global:
   scrape_interval: 15s
   evaluation_interval: 15s
 
+# Alerting disabled - no alertmanager service configured
+# alerting:
+#   alertmanagers:
+#     - static_configs:
+#         - targets: ['alertmanager:9093']
+
+# Rule files disabled until alertmanager is deployed
+# rule_files:
+#   - 'alert.rules.yml'
+#   - 'recording.rules.yml'
+
 scrape_configs:
   - job_name: 'webhook-processor'
     static_configs:
@@ -12,12 +23,3 @@ scrape_configs:
   - job_name: 'prometheus'
     static_configs:
       - targets: ['localhost:9090']
-
-rule_files:
-  - 'alert.rules.yml'
-  - 'recording.rules.yml'
-
-# alerting:
-#   alertmanagers:
-#   - static_configs:
-#     - targets: ['alertmanager:9093']
