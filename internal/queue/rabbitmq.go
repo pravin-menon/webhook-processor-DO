@@ -79,47 +79,115 @@ func NewRabbitMQ(rabbitCfg config.RabbitMQConfig, logger *zap.Logger) (*RabbitMQ
 }
 
 func (r *RabbitMQ) Publish(event models.WebhookEvent) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
+	const maxRetries = 3
+	var lastErr error
 
-	body, err := json.Marshal(event)
-	if err != nil {
-		return fmt.Errorf("failed to marshal event: %v", err)
-	}
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		// Check if connection is closed; reconnect if needed
+		if r.conn == nil || r.conn.IsClosed() || r.ch == nil || r.ch.IsClosed() {
+			r.logger.Warn("RabbitMQ connection lost, attempting reconnect",
+				zap.Int("attempt", attempt+1),
+			)
+			if err := r.reconnect(); err != nil {
+				lastErr = err
+				backoffDuration := time.Duration(1<<uint(attempt)) * time.Second // exponential backoff
+				r.logger.Error("Reconnect failed, backing off",
+					zap.Int("attempt", attempt+1),
+					zap.Duration("backoff", backoffDuration),
+					zap.Error(err),
+				)
+				time.Sleep(backoffDuration)
+				continue
+			}
+		}
 
-	// Add headers with the client ID for the worker to use
-	headers := make(amqp.Table)
-	headers["webhook_id"] = event.WebhookID
-	headers["webhook_type"] = event.WebhookType
-	headers["client_id"] = event.ClientID
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		body, err := json.Marshal(event)
+		cancel()
 
-	// Publish to all queues bound to this exchange
-	err = r.ch.PublishWithContext(ctx,
-		r.exchangeName,
-		"",    // routing key
-		false, // mandatory
-		false, // immediate
-		amqp.Publishing{
-			ContentType:  "application/json",
-			Headers:      headers,
-			Body:         body,
-			DeliveryMode: amqp.Persistent,
-		})
+		if err != nil {
+			return fmt.Errorf("failed to marshal event: %v", err)
+		}
 
-	if err != nil {
-		return fmt.Errorf("failed to publish message: %v", err)
-	}
+		// Add headers with the client ID for the worker to use
+		headers := make(amqp.Table)
+		headers["webhook_id"] = event.WebhookID
+		headers["webhook_type"] = event.WebhookType
+		headers["client_id"] = event.ClientID
 
-	// Log publish success for tracing
-	if r.logger != nil {
-		r.logger.Info("Published message",
-			zap.String("client_id", event.ClientID),
-			zap.String("event", event.Event),
-			zap.String("webhook_id", event.WebhookID),
-			zap.String("exchange", r.exchangeName),
+		// Publish to all queues bound to this exchange
+		ctx, cancel = context.WithTimeout(context.Background(), 5*time.Second)
+		err = r.ch.PublishWithContext(ctx,
+			r.exchangeName,
+			"",    // routing key
+			false, // mandatory
+			false, // immediate
+			amqp.Publishing{
+				ContentType:  "application/json",
+				Headers:      headers,
+				Body:         body,
+				DeliveryMode: amqp.Persistent,
+			})
+		cancel()
+
+		if err == nil {
+			// Log publish success for tracing
+			if r.logger != nil {
+				r.logger.Info("Published message",
+					zap.String("client_id", event.ClientID),
+					zap.String("event", event.Event),
+					zap.String("webhook_id", event.WebhookID),
+					zap.String("exchange", r.exchangeName),
+				)
+			}
+			return nil
+		}
+
+		lastErr = err
+		r.logger.Warn("Publish failed, will retry",
+			zap.Int("attempt", attempt+1),
+			zap.Error(err),
 		)
+
+		backoffDuration := time.Duration(1<<uint(attempt)) * time.Second
+		time.Sleep(backoffDuration)
 	}
 
+	return fmt.Errorf("failed to publish message after %d attempts: %w", maxRetries, lastErr)
+}
+
+func (r *RabbitMQ) reconnect() error {
+	// Close existing connection/channel
+	if r.ch != nil && !r.ch.IsClosed() {
+		r.ch.Close()
+	}
+	if r.conn != nil && !r.conn.IsClosed() {
+		r.conn.Close()
+	}
+
+	// Dial new connection
+	conn, err := amqp.Dial(r.config.URL)
+	if err != nil {
+		return fmt.Errorf("failed to reconnect to RabbitMQ: %v", err)
+	}
+
+	ch, err := conn.Channel()
+	if err != nil {
+		conn.Close()
+		return fmt.Errorf("failed to open new channel: %v", err)
+	}
+
+	// Re-declare topology (idempotent)
+	_, err = DeclareTopology(ch, r.config, r.logger)
+	if err != nil {
+		ch.Close()
+		conn.Close()
+		return fmt.Errorf("failed to redeclare topology: %v", err)
+	}
+
+	r.conn = conn
+	r.ch = ch
+	r.logger.Info("Reconnected to RabbitMQ")
 	return nil
 }
 
