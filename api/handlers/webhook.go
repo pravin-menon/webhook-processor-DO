@@ -17,11 +17,11 @@ import (
 )
 
 type MailerCloudWebhookHandler struct {
-	logger        *zap.Logger
-	publisher     queue.Publisher
-	rateLimiter   *RateLimiter
-	webhookMapper *mapping.WebhookMappingService
-	webhookCfg    config.WebhookConfig
+	logger         *zap.Logger
+	publisher      queue.Publisher
+	rateLimiter    *RateLimiter
+	webhookMapper  *mapping.WebhookMappingService
+	webhookCfg     config.WebhookConfig
 	failureTracker *FailureTracker
 }
 
@@ -36,11 +36,11 @@ func NewMailerCloudWebhookHandler(logger *zap.Logger, publisher queue.Publisher,
 		webhookCfg.MaxConsecutiveFailures = 20
 	}
 	return &MailerCloudWebhookHandler{
-		logger:        logger,
-		publisher:     publisher,
-		rateLimiter:   NewRateLimiter(),
-		webhookMapper: webhookMapper,
-		webhookCfg:    webhookCfg,
+		logger:         logger,
+		publisher:      publisher,
+		rateLimiter:    NewRateLimiter(),
+		webhookMapper:  webhookMapper,
+		webhookCfg:     webhookCfg,
 		failureTracker: NewFailureTracker(),
 	}
 }
@@ -61,6 +61,15 @@ func (h *MailerCloudWebhookHandler) HandleWebhook(c *gin.Context) {
 		})
 		return
 	}
+
+	// Log all POST requests with headers for debugging
+	webhookIDHeader := c.GetHeader("Webhook-Id")
+	userAgentHeader := c.GetHeader("User-Agent")
+	h.logger.Info("Incoming POST to /webhook endpoint",
+		zap.String("webhook_id_header", webhookIDHeader),
+		zap.String("user_agent", userAgentHeader),
+		zap.String("remote_ip", c.ClientIP()),
+	)
 
 	// For MailerCloud webhooks, parse the request body
 	var data map[string]interface{}
@@ -127,6 +136,11 @@ func (h *MailerCloudWebhookHandler) HandleWebhook(c *gin.Context) {
 
 	// Extract client ID using the webhook mapping service
 	clientID = h.extractClientID(c, data)
+
+	h.logger.Info("Extracted client ID from webhook",
+		zap.String("client_id", clientID),
+		zap.String("webhook_id_header", c.GetHeader("Webhook-Id")),
+	)
 
 	// Check rate limits for the identified client
 	if !h.rateLimiter.AllowRequest(clientID) {
