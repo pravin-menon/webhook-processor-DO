@@ -340,7 +340,7 @@ func (h *MailerCloudWebhookHandler) extractClientID(c *gin.Context, data map[str
 	// Primary Strategy: Use Webhook-Id header to lookup client via mapping service
 	webhookID := c.GetHeader("Webhook-Id")
 	if webhookID != "" && h.webhookMapper != nil {
-		h.logger.Info("Attempting to lookup client via webhook ID", 
+		h.logger.Info("Attempting to lookup client via webhook ID",
 			zap.String("webhook_id", webhookID),
 			zap.Int("webhook_id_len", len(webhookID)))
 
@@ -354,13 +354,13 @@ func (h *MailerCloudWebhookHandler) extractClientID(c *gin.Context, data map[str
 		// Log mapping stats for debugging - include the actual map contents
 		stats := h.webhookMapper.GetMappingStats()
 		webhookMap := stats["webhook_to_client"].(map[string]string)
-		
+
 		// Check if incoming webhook_id is close to any in the map
 		var availableIDs []string
 		for id := range webhookMap {
 			availableIDs = append(availableIDs, id)
 		}
-		
+
 		h.logger.Error("Webhook ID not found in mapping - CRITICAL DEBUG INFO",
 			zap.String("incoming_webhook_id", webhookID),
 			zap.Strings("available_webhook_ids", availableIDs),
